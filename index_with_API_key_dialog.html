@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MovieFinder</title>
+    <!-- 1. Include Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 2. Include Vue.js (v3) -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        /* Simple dark theme */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-6">
+
+    <!-- This is the root element for our Vue app -->
+    <div id="app" class="max-w-4xl mx-auto">
+
+        <h1 class="text-4xl font-bold text-center mb-6 text-blue-400">MovieFinder</h1>
+
+        <!-- API Key Input -->
+        <div class="mb-6 p-4 bg-gray-800 rounded-lg shadow-md">
+            <label for="apiKey" class="block text-sm font-medium text-gray-300 mb-2">Ваш OMDb API Ключ</label>
+            <input 
+                type="text" 
+                id="apiKey"
+                v-model="apiKey"
+                placeholder="Вставте ваш API ключ тут"
+                class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <p class="text-xs text-gray-400 mt-2">Отримайте безкоштовний ключ на <a href="https://www.omdbapi.com/apikey.php" target="_blank" class="text-blue-400 hover:underline">omdbapi.com/apikey.php</a> (оберіть 'FREE').</p>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="mb-8 flex space-x-2">
+            <input 
+                type="text"
+                v-model="searchTerm"
+                @keyup.enter="searchMovies"
+                placeholder="Введіть назву фільму (напр., 'Shrek')"
+                class="flex-grow px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+            <button
+                @click="searchMovies"
+                :disabled="loading || !apiKey"
+                class="px-5 py-2 bg-blue-600 rounded-lg font-semibold text-white hover:bg-blue-700 transition duration-200 disabled:bg-gray-500 disabled:cursor-not-allowed"
+            >
+                <span v-if="loading">Пошук...</span>
+                <span v-else>Пошук</span>
+            </button>
+        </div>
+
+        <!-- Error Message -->
+        <div v-if="error" class="mb-4 p-3 bg-red-800 text-red-100 rounded-lg text-center">
+            {{ error }}
+        </div>
+
+        <!-- Main Content (Results & Watchlist) -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+            
+            <!-- Search Results (Column 1-2) -->
+            <div class="md:col-span-2">
+                <h2 class="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">Результати пошуку</h2>
+                <div v-if="!results.length && !loading && !error" class="text-gray-400">
+                    Почніть пошук, щоб побачити результати.
+                </div>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <!-- Loop through search results -->
+                    <div v-for="movie in results" :key="movie.imdbID" class="bg-gray-800 rounded-lg shadow-lg overflow-hidden transition-all duration-300 hover:shadow-xl">
+                        <img 
+                            :src="movie.Poster !== 'N/A' ? movie.Poster : 'https://placehold.co/300x450/374151/E5E7EB?text=' + encodeURIComponent(movie.Title)" 
+                            :alt="'Постер ' + movie.Title" 
+                            class="w-full h-64 object-cover"
+                        >
+                        <div class="p-4">
+                            <h3 class="text-lg font-bold">{{ movie.Title }}</h3>
+                            <p class="text-gray-400 text-sm mb-3">{{ movie.Year }}</p>
+                            <button
+                                @click="addToWatchlist(movie)"
+                                :disabled="isInWatchlist(movie.imdbID)"
+                                class="w-full px-3 py-2 bg-green-600 rounded-lg text-sm font-medium hover:bg-green-700 transition duration-200 disabled:bg-gray-500 disabled:cursor-not-allowed"
+                            >
+                                <span v-if="isInWatchlist(movie.imdbID)">Вже у списку</span>
+                                <span v-else>+ Додати до списку</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Watchlist (Column 3) -->
+            <div class="md:col-span-1">
+                <h2 class="text-2xl font-semibold mb-4 border-b border-gray-700 pb-2">Мій список</h2>
+                <div v-if="!watchlist.length" class="text-gray-400">
+                    Ваш список "до перегляду" порожній.
+                </div>
+                
+                <ul class="space-y-3">
+                    <!-- Loop through watchlist -->
+                    <li v-for="movie in watchlist" :key="movie.imdbID" class="flex items-center justify-between p-3 bg-gray-800 rounded-lg shadow">
+                        <div>
+                            <h4 class="font-semibold">{{ movie.Title }}</h4>
+                            <p class="text-gray-400 text-sm">{{ movie.Year }}</p>
+                        </div>
+                        <button
+                            @click="removeFromWatchlist(movie.imdbID)"
+                            title="Видалити зі списку"
+                            class="px-2 py-1 bg-red-600 rounded-full text-white text-xs font-bold hover:bg-red-700 transition duration-200"
+                        >
+                            X
+                        </button>
+                    </li>
+                </ul>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        // 3. Create the Vue Application
+        const { createApp, ref, onMounted } = Vue;
+
+        createApp({
+            // setup() is the modern way to define components in Vue 3 (Composition API)
+            setup() {
+                // --- Reactive State ---
+                // ref() makes variables reactive.
+                const apiKey = ref('');
+                const searchTerm = ref('');
+                const results = ref([]);
+                const watchlist = ref([]);
+                const loading = ref(false);
+                const error = ref(null);
+                
+                const WATCHLIST_STORAGE_KEY = 'movie-finder-watchlist';
+
+                // --- Lifecycle Hooks ---
+                // onMounted() runs when the component is first loaded.
+                onMounted(() => {
+                    // Load the watchlist from local storage
+                    const savedWatchlist = localStorage.getItem(WATCHLIST_STORAGE_KEY);
+                    if (savedWatchlist) {
+                        watchlist.value = JSON.parse(savedWatchlist);
+                    }
+                    // We can also load the API key if we wanted to save it
+                    // const savedApiKey = localStorage.getItem('movie-finder-apikey');
+                    // if (savedApiKey) { apiKey.value = savedApiKey; }
+                });
+
+                // --- Methods ---
+
+                /**
+                 * Fetches movies from OMDb API based on the searchTerm.
+                 */
+                async function searchMovies() {
+                    if (!apiKey.value) {
+                        error.value = 'Будь ласка, введіть ваш API ключ.';
+                        return;
+                    }
+                    if (!searchTerm.value) {
+                        error.value = 'Будь ласка, введіть назву фільму для пошуку.';
+                        return;
+                    }
+
+                    loading.value = true;
+                    error.value = null;
+                    results.value = [];
+
+                    const url = `https://www.omdbapi.com/?s=${encodeURIComponent(searchTerm.value)}&apikey=${apiKey.value}`;
+
+                    try {
+                        const response = await fetch(url);
+                        const data = await response.json();
+
+                        if (data.Response === "True") {
+                            results.value = data.Search;
+                        } else {
+                            // Handle API errors (e.g., "Movie not found!", "Invalid API key")
+                            error.value = data.Error || 'Невідома помилка API.';
+                        }
+                    } catch (e) {
+                        // Handle network errors
+                        console.error('Fetch error:', e);
+                        error.value = 'Не вдалося підключитися до сервера. Перевірте інтернет-з\'єднання.';
+                    } finally {
+                        // This runs whether the try succeeded or failed
+                        loading.value = false;
+                    }
+                }
+
+                /**
+                 * Saves the current watchlist to local storage.
+                 */
+                function saveWatchlist() {
+                    localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(watchlist.value));
+                    
+                    // We could also save the API key
+                    // localStorage.setItem('movie-finder-apikey', apiKey.value);
+                }
+
+                /**
+                 * Checks if a movie is already in the watchlist.
+                 * @param {string} imdbID - The ID of the movie to check.
+                 */
+                function isInWatchlist(imdbID) {
+                    return watchlist.value.some(movie => movie.imdbID === imdbID);
+                }
+
+                /**
+                 * Adds a movie object to the watchlist.
+                 * @param {object} movie - The movie object from search results.
+                 */
+                function addToWatchlist(movie) {
+                    if (!isInWatchlist(movie.imdbID)) {
+                        watchlist.value.push(movie);
+                        saveWatchlist();
+                    }
+                }
+
+                /**
+                 * Removes a movie from the watchlist by its ID.
+                 * @param {string} imdbID - The ID of the movie to remove.
+                 */
+                function removeFromWatchlist(imdbID) {
+                    watchlist.value = watchlist.value.filter(movie => movie.imdbID !== imdbID);
+                    saveWatchlist();
+                }
+
+                // --- Expose to Template ---
+                // We must return everything we want to use in the HTML
+                return {
+                    apiKey,
+                    searchTerm,
+                    results,
+                    watchlist,
+                    loading,
+                    error,
+                    searchMovies,
+                    addToWatchlist,
+                    removeFromWatchlist,
+                    isInWatchlist
+                };
+            }
+        }).mount('#app'); // Mount the app to the <div id="app">
+    </script>
+
+</body>
+</html>
